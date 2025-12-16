@@ -86,7 +86,7 @@ type TableInterface interface {
 // Table represents a loaded table file with the info we have about it.
 type Table struct {
 	sync.Mutex
-	*z.MmapFile
+	*HybridMmapFile
 
 	tableSize int // Initialized in OpenTable, using fd.Stat().
 
@@ -244,7 +244,9 @@ func (b *Block) verifyCheckSum() error {
 
 func CreateTable(fname string, builder *Builder) (*Table, error) {
 	bd := builder.Done()
-	mf, err := z.OpenMmapFile(fname, os.O_CREATE|os.O_RDWR|os.O_EXCL, bd.Size)
+	// O_CREAD and O_EXCL *ensures* that we create the file; if it already exists here,
+	// that's an error.
+	mf, err := OpenMmapFile(fname, os.O_CREATE|os.O_RDWR|os.O_EXCL, bd.Size)
 	if err == z.NewFile {
 		// Expected.
 	} else if err != nil {
@@ -265,7 +267,7 @@ func CreateTable(fname string, builder *Builder) (*Table, error) {
 // entry. Returns a table with one reference count on it (decrementing which may delete the file!
 // -- consider t.Close() instead). The fd has to writeable because we call Truncate on it before
 // deleting. Checksum for all blocks of table is verified based on value of chkMode.
-func OpenTable(mf *z.MmapFile, opts Options) (*Table, error) {
+func OpenTable(mf *HybridMmapFile, opts Options) (*Table, error) {
 	// BlockSize is used to compute the approximate size of the decompressed
 	// block. It should not be zero if the table is compressed.
 	if opts.BlockSize == 0 && opts.Compression != options.None {
@@ -284,7 +286,7 @@ func OpenTable(mf *z.MmapFile, opts Options) (*Table, error) {
 		return nil, fmt.Errorf("Invalid filename: %s", filename)
 	}
 	t := &Table{
-		MmapFile:   mf,
+		HybridMmapFile:   mf,
 		id:         id,
 		opt:        &opts,
 		IsInmemory: false,
@@ -311,12 +313,12 @@ func OpenTable(mf *z.MmapFile, opts Options) (*Table, error) {
 // OpenInMemoryTable is similar to OpenTable but it opens a new table from the provided data.
 // OpenInMemoryTable is used for L0 tables.
 func OpenInMemoryTable(data []byte, id uint64, opt *Options) (*Table, error) {
-	mf := &z.MmapFile{
+	mf := &HybridMmapFile{
 		Data: data,
 		Fd:   nil,
 	}
 	t := &Table{
-		MmapFile:   mf,
+		HybridMmapFile:   mf,
 		opt:        opt,
 		tableSize:  len(data),
 		IsInmemory: true,
@@ -405,7 +407,7 @@ func (t *Table) initBiggestAndSmallest() error {
 }
 
 func (t *Table) read(off, sz int) ([]byte, error) {
-	return t.Bytes(off, sz)
+	return Bytes(off, sz)
 }
 
 func (t *Table) readNoFail(off, sz int) []byte {
